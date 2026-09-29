@@ -12,7 +12,7 @@ env:
   ECS_CLUSTER: container-runner
   ECS_SERVICE: container-runner
   TASK_DEFINITION_FAMILY: container-runner
-  CONTAINER_NAME: container-runner
+  CONTAINER_NAME: Main
 
 jobs:
   # CI: プルリクエストでも main へのpushでも、必ずテストを実行する
