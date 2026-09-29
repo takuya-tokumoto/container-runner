@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Container Runner</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; font-family: system-ui, sans-serif; color: #172033; background: #dbeafe; }
+    main { width: min(880px, calc(100% - 32px)); padding: 20px; border-radius: 16px; background: #fff; box-shadow: 0 16px 40px rgba(0, 0, 0, .2); }
+    header { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+    h1 { margin: 0; font-size: 1.6rem; }
+    .badges { display: flex; align-items: center; gap: 8px; }
+    .version { padding: 6px 12px; border-radius: 999px; color: #fff; background: #16a34a; font-weight: 800; }
+    .commit { font-family: ui-monospace, monospace; font-size: .85rem; color: #475569; }
+    .status { display: flex; gap: 16px; margin: 16px 0 8px; font-weight: 700; }
+    canvas { width: 100%; display: block; border-radius: 12px; touch-action: manipulation; cursor: pointer; }
+    p { margin: 12px 0 0; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>📦 Container Runner</h1>
+      <div class="badges">
+        <span class="commit" id="commit">commit: -</span>
+        <span class="version" id="version">VERSION</span>
+      </div>
+    </header>
+    <div class="status">
+      <span>SCORE: <b id="score">0</b></span>
+      <span>SPEED: <b id="speed">6</b></span>
+    </div>
+    <canvas id="game" width="840" height="300" aria-label="障害物ジャンプゲーム"></canvas>
+    <p id="message">Space／↑／クリック／タップでスタート</p>
+  </main>
+
+  <script type="module">
+    import { VERSION, GROUND, GRAVITY, JUMP_VELOCITY, BASE_SPEED, isHit, speedFor } from "./game.js";
+
+    const $ = id => document.getElementById(id);
+    const canvas = $("game");
+    const ctx = canvas.getContext("2d");
+
+    const player = { x: 90, y: GROUND - 48, w: 48, h: 48, vy: 0 };
+    let obstacles = [];
+    let running = false;
+    let score = 0;
+    let spawnIn = 60;                                      // 次の障害物までのフレーム数
+
+    $("version").textContent = `VERSION ${VERSION}`;
+
+    // どのコミットからビルドされたイメージかを表示する
+    fetch("./version.json", { cache: "no-store" })
+      .then(res => (res.ok ? res.json() : null))
+      .then(info => {
+        if (info) $("commit").textContent = `commit: ${info.commit.slice(0, 7)}`;
+      })
+      .catch(() => {});
+
+    function start() {
+      obstacles = [];
+      player.y = GROUND - player.h;
+      player.vy = 0;
+      score = 0;
+      spawnIn = 60;
+      running = true;
+      $("message").textContent = "荷箱をジャンプで避けよう！";
+    }
+
+    function jump() {
+      if (!running) return start();
+      if (player.y >= GROUND - player.h) player.vy = JUMP_VELOCITY; // 地面にいるときだけジャンプ
+    }
+
+    function gameOver() {
+      running = false;
+      $("message").textContent = `GAME OVER - SCORE ${Math.floor(score)}`;
+    }
+
+    function update() {
+      // 重力
+      player.vy += GRAVITY;
+      player.y = Math.min(player.y + player.vy, GROUND - player.h);
+
+      score += 0.12;
+      const speed = speedFor(score);                       // v2: スコアに応じて速くなる
+
+      // 障害物の生成と移動
+      if (--spawnIn <= 0) {
+        const h = 34 + Math.random() * 34;
+        obstacles.push({ x: canvas.width, y: GROUND - h, w: 28 + Math.random() * 20, h });
+        spawnIn = 80 + Math.random() * 70;
+      }
+      obstacles.forEach(o => o.x -= speed);
+      obstacles = obstacles.filter(o => o.x + o.w > 0);
+
+      if (obstacles.some(o => isHit(player, o))) gameOver();
+
+      $("score").textContent = Math.floor(score);
+      $("speed").textContent = speed;
+    }
+
+    function draw() {
+      const sky = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      sky.addColorStop(0, "#8ed6ff");
+      sky.addColorStop(1, "#e8f7ff");
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = "#fff7cc";                           // 太陽
+      ctx.beginPath();
+      ctx.arc(740, 60, 30, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "#c9e7bf";                           // 地面
+      ctx.fillRect(0, GROUND, canvas.width, canvas.height - GROUND);
+
+      ctx.fillStyle = "#16a34a";                           // プレイヤー（コンテナ）。v2は緑
+      ctx.fillRect(player.x, player.y, player.w, player.h);
+
+      ctx.fillStyle = "#b45309";                           // 障害物（荷箱）
+      obstacles.forEach(o => ctx.fillRect(o.x, o.y, o.w, o.h));
+
+      if (!running) {                                      // 停止中はタイトルを重ねる
+        ctx.fillStyle = "rgba(0, 0, 0, .4)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#fff";
+        ctx.textAlign = "center";
+        ctx.font = "bold 28px system-ui";
+        ctx.fillText(`Container Runner ${VERSION}`, canvas.width / 2, 140);
+        ctx.font = "16px system-ui";
+        ctx.fillText("SPACE TO START", canvas.width / 2, 175);
+      }
+    }
+
+    function loop() {
+      if (running) update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    document.addEventListener("keydown", e => {
+      if (e.code === "Space" || e.code === "ArrowUp") {
+        e.preventDefault();
+        jump();
+      }
+    });
+    canvas.addEventListener("pointerdown", jump);
+
+    $("speed").textContent = BASE_SPEED;
+    loop();
+  </script>
+</body>
+</html>

@@ -1,0 +1,99 @@
+name: Container Runner CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  AWS_REGION: us-west-2
+  ECR_REPOSITORY: container-runner
+  ECS_CLUSTER: container-runner
+  ECS_SERVICE: container-runner
+  TASK_DEFINITION_FAMILY: container-runner
+  CONTAINER_NAME: container-runner
+
+jobs:
+  # CI: プルリクエストでも main へのpushでも、必ずテストを実行する
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Run tests
+        run: npm test
+
+  # CD: テストが通り、かつ main へのpushのときだけデプロイする
+  deploy:
+    needs: test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          mask-aws-account-id: true
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push the image
+        id: build
+        env:
+          IMAGE: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+        run: |
+          docker build --build-arg GIT_SHA=${{ github.sha }} -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Render the task definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition-family: ${{ env.TASK_DEFINITION_FAMILY }}
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.build.outputs.image }}
+
+      - name: Deploy to Amazon ECS
+        id: deploy
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Write a job summary
+        env:
+          TASK_DEFINITION_ARN: ${{ steps.deploy.outputs.task-definition-arn }}
+        run: |
+          {
+            echo "## Deployed to ${ECS_SERVICE}"
+            echo ""
+            echo "| 項目 | 値 |"
+            echo "|---|---|"
+            echo "| コミット | \`${GITHUB_SHA::7}\` |"
+            echo "| イメージのタグ | \`${GITHUB_SHA}\` |"
+            echo "| タスク定義 | \`${TASK_DEFINITION_FAMILY}:${TASK_DEFINITION_ARN##*:}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
